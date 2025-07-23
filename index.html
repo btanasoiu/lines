@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Neon Cyberpunk Lines – Full</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+  :root{
+    --bg:#0d0d1a;
+    --grid:#1a1a2e;
+    --neon-cyan:#00f5ff;
+    --neon-purple:#9d00ff;
+    --neon-pink:#ff00ff;
+    --neon-lime:#39ff14;
+    --neon-orange:#ff5e00;
+    --neon-blue:#007bff;
+    --text:#ffffff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:'Orbitron',monospace;display:flex;justify-content:center;align-items:center;user-select:none;}
+  #gameContainer{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap;}
+  #gameBoard{display:grid;grid-template-columns:repeat(9,48px);grid-template-rows:repeat(9,48px);gap:2px;background:var(--grid);padding:8px;border:2px solid var(--neon-cyan);box-shadow:0 0 20px var(--neon-cyan);border-radius:6px;}
+  .cell{width:48px;height:48px;background:#111;position:relative;border-radius:4px;}
+  .ball{position:absolute;top:50%;left:50%;width:38px;height:38px;border-radius:50%;transform:translate(-50%,-50%) scale(1);box-shadow:0 0 12px currentColor,0 0 24px currentColor;transition:transform .3s ease,opacity .3s ease;}
+  .ball.selected{transform:translate(-50%,-50%) scale(1.2);}
+  .ball.removing{transform:translate(-50%,-50%) scale(0);opacity:0;}
+  /* NEW-BALL GROW */
+  @keyframes growIn{from{transform:translate(-50%,-50%) scale(0);opacity:0;}to{transform:translate(-50%,-50%) scale(1);opacity:1;}}
+  .ball.new{animation:growIn .25s ease-out forwards;}
+  #ui{display:flex;flex-direction:column;gap:18px;min-width:200px;}
+  .panel{background:#111;padding:14px;border:1px solid var(--neon-purple);border-radius:6px;box-shadow:0 0 15px var(--neon-purple);}
+  .panel h2{margin:0 0 8px;font-size:1.1em;color:var(--neon-purple);}
+  #preview{display:flex;gap:8px;justify-content:center;}
+  .preview-ball{width:24px;height:24px;border-radius:50%;box-shadow:0 0 8px currentColor;}
+  button{background:transparent;color:var(--neon-cyan);border:1px solid var(--neon-cyan);padding:8px 14px;border-radius:4px;cursor:pointer;transition:background .2s,box-shadow .2s;font-family:'Orbitron',monospace;}
+  button:hover{background:var(--neon-cyan);color:var(--bg);box-shadow:0 0 10px var(--neon-cyan);}
+  button.active{background:var(--neon-cyan);color:var(--bg);}
+  /* HIGH-SCORE MODAL */
+  #hsModal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);display:none;justify-content:center;align-items:center;z-index:999;}
+  #hsBox{background:#111;border:2px solid var(--neon-pink);padding:25px;border-radius:8px;max-height:70vh;overflow-y:auto;min-width:260px;text-align:center;}
+  #hsBox h2{color:var(--neon-pink);margin-top:0;}
+  #hsList{list-style:none;padding:0;margin:0 0 15px;}
+  #hsList li{margin:6px 0;font-size:.9em;}
+  @media(max-width:700px){
+    #gameBoard{grid-template-columns:repeat(9,32px);grid-template-rows:repeat(9,32px);}
+    .cell{width:32px;height:32px;}
+    .ball{width:26px;height:26px;}
+  }
+</style>
+</head>
+<body>
+  <div id="gameContainer">
+    <div id="gameBoard"></div>
+    <div id="ui">
+      <div class="panel">
+        <h2>Score</h2>
+        <div id="score">0</div>
+        <button id="hsBtn">High Scores</button>
+      </div>
+      <div class="panel">
+        <h2>Mode</h2>
+        <button id="classicBtn" class="active">Classic</button>
+        <button id="squareBtn">Squares</button>
+      </div>
+      <div class="panel">
+        <h2>Next</h2>
+        <div id="preview"></div>
+      </div>
+      <button id="newGameBtn">New Game</button>
+    </div>
+  </div>
+
+  <!-- High-Score Modal -->
+  <div id="hsModal">
+    <div id="hsBox">
+      <h2>Top 10 Scores</h2>
+      <ul id="hsList"></ul>
+      <button onclick="closeModal()">Close</button>
+    </div>
+  </div>
+
+<script>
+/* ========== CONFIG ========== */
+const SIZE = 9;
+const COLORS = ["var(--neon-cyan)","var(--neon-purple)","var(--neon-pink)","var(--neon-lime)","var(--neon-orange)","var(--neon-blue)"];
+const MIN_LINE   = 5;
+const MIN_SQUARE = 4;
+
+/* ========== STATE ========== */
+let mode = 'classic';
+let grid = [];
+let selected = null;
+let score = 0;
+let nextBalls = [];
+let animating = false;
+
+/* ========== BOARD & DOM ========== */
+const boardEl   = document.getElementById('gameBoard');
+const scoreEl   = document.getElementById('score');
+const modal     = document.getElementById('hsModal');
+
+/* ========== INIT ========== */
+initBoard();
+renderBoard();
+generateNextBalls();
+loadHighScores(); // loads on every page load so button is ready
+
+/* ========== EVENTS ========== */
+boardEl.addEventListener('click', handleClick);
+document.getElementById('classicBtn').addEventListener('click', ()=>setMode('classic'));
+document.getElementById('squareBtn').addEventListener('click', ()=>setMode('squares'));
+document.getElementById('newGameBtn').addEventListener('click', newGame);
+document.getElementById('hsBtn').addEventListener('click', showHighScores);
+
+/* ========== HIGH-SCORE TABLE ========== */
+function loadHighScores(){
+  return JSON.parse(localStorage.getItem('neonLinesScores') || '[]');
+}
+function saveScore(s){
+  const list = loadHighScores();
+  list.push({date:new Date().toLocaleDateString(), score:s});
+  list.sort((a,b)=>b.score-a.score);
+  localStorage.setItem('neonLinesScores', JSON.stringify(list.slice(0,10)));
+}
+function showHighScores(){
+  const list = loadHighScores();
+  const ul = document.getElementById('hsList');
+  ul.innerHTML='';
+  if(list.length===0) ul.innerHTML='<li>No scores yet</li>';
+  else list.forEach((e,i)=>ul.innerHTML+=`<li>${i+1}. ${e.score} – ${e.date}</li>`);
+  modal.style.display='flex';
+}
+function closeModal(){ modal.style.display='none'; }
+
+/* ========== GAME LOGIC ========== */
+function initBoard(){
+  grid = Array.from({length:SIZE},()=>Array(SIZE).fill(null));
+}
+function renderBoard(){
+  boardEl.innerHTML='';
+  for(let r=0;r<SIZE;r++){
+    for(let c=0;c<SIZE;c++){
+      const cell = document.createElement('div');
+      cell.className='cell';
+      cell.dataset.r=r; cell.dataset.c=c;
+      if(grid[r][c]!==null){
+        const ball = document.createElement('div');
+        ball.className='ball';
+        ball.style.backgroundColor = COLORS[grid[r][c]];
+        ball.style.color = COLORS[grid[r][c]];
+        cell.appendChild(ball);
+      }
+      boardEl.appendChild(cell);
+    }
+  }
+}
+function generateNextBalls(){
+  nextBalls = Array.from({length:3},()=>Math.floor(Math.random()*COLORS.length));
+  const previewEl = document.getElementById('preview');
+  previewEl.innerHTML='';
+  nextBalls.forEach(color=>{
+    const d=document.createElement('div');
+    d.className='preview-ball';
+    d.style.backgroundColor=COLORS[color];
+    d.style.color=COLORS[color];
+    previewEl.appendChild(d);
+  });
+}
+/* NEW: animated entry */
+function placeBallWithAnim(r,c,colorIndex){
+  grid[r][c]=colorIndex;
+  const cell = document.querySelector(`.cell[data-r="${r}"][data-c="${c}"]`);
+  const ball = document.createElement('div');
+  ball.className='ball new';
+  ball.style.backgroundColor = COLORS[colorIndex];
+  ball.style.color = COLORS[colorIndex];
+  cell.appendChild(ball);
+  setTimeout(()=>ball.classList.remove('new'),250);
+}
+function addBalls(){
+  const empties=[];
+  for(let r=0;r<SIZE;r++)for(let c=0;c<SIZE;c++)if(grid[r][c]===null)empties.push([r,c]);
+  if(empties.length===0){ gameOver(); return; }
+  const count = Math.min(3,empties.length);
+  for(let i=0;i<count;i++){
+    const idx=Math.floor(Math.random()*empties.length);
+    const [r,c]=empties.splice(idx,1)[0];
+    placeBallWithAnim(r,c,nextBalls[i]);
+  }
+  generateNextBalls();
+}
+function handleClick(e){
+  if(animating) return;
+  const cell=e.target.closest('.cell');
+  if(!cell) return;
+  const r=+cell.dataset.r, c=+cell.dataset.c;
+
+  if(selected){
+    const [sr,sc]=selected;
+    if(grid[r][c]===null && canMove(sr,sc,r,c)){
+      moveBall(sr,sc,r,c);
+      selected=null;
+      renderBoard();
+      checkMatches(r,c);
+    }else{
+      selected=null;
+      renderBoard();
+    }
+  }else{
+    if(grid[r][c]!==null){
+      selected=[r,c];
+      cell.firstElementChild?.classList.add('selected');
+    }
+  }
+}
+function canMove(sr,sc,tr,tc){
+  if(sr===tr && sc===tc) return false;
+  const visited=Array.from({length:SIZE},()=>Array(SIZE).fill(false));
+  const q=[[sr,sc]];
+  visited[sr][sc]=true;
+  const dirs=[[-1,0],[1,0],[0,-1],[0,1]];
+  while(q.length){
+    const [r,c]=q.shift();
+    for(const [dr,dc] of dirs){
+      const nr=r+dr,nc=c+dc;
+      if(nr<0||nc<0||nr>=SIZE||nc>=SIZE) continue;
+      if(nr===tr && nc===tc) return true;
+      if(grid[nr][nc]===null && !visited[nr][nc]){visited[nr][nc]=true;q.push([nr,nc]);}
+    }
+  }
+  return false;
+}
+function moveBall(sr,sc,tr,tc){
+  grid[tr][tc]=grid[sr][sc];
+  grid[sr][sc]=null;
+}
+function checkMatches(lastR,lastC){
+  animating=true;
+  let removed = new Set();
+  if(mode==='classic'){
+    const dirs=[[0,1],[1,0],[1,1],[1,-1]];
+    for(const [dr,dc] of dirs){
+      const line = [];
+      for(let d=-(MIN_LINE-1);d<=MIN_LINE-1;d++){
+        const r=lastR+dr*d,c=lastC+dc*d;
+        if(r<0||c<0||r>=SIZE||c>=SIZE) continue;
+        if(grid[r][c]===grid[lastR][lastC]) line.push([r,c]);
+        else{
+          if(line.length>=MIN_LINE) line.forEach(p=>removed.add(p.join(',')));
+          line.length=0;
+        }
+      }
+      if(line.length>=MIN_LINE) line.forEach(p=>removed.add(p.join(',')));
+    }
+  }else{
+    const color = grid[lastR][lastC];
+    for(let r=0;r<SIZE;r++){
+      for(let c=0;c<SIZE;c++){
+        if(grid[r][c]===color){
+          if(r+1<SIZE && c+1<SIZE){
+            if(grid[r+1][c]===color && grid[r][c+1]===color && grid[r+1][c+1]===color){
+              [[r,c],[r+1,c],[r,c+1],[r+1,c+1]].forEach(p=>removed.add(p.join(',')));
+            }
+          }
+          if(c+3<SIZE && grid[r][c+1]===color && grid[r][c+2]===color && grid[r][c+3]===color){
+            [[r,c],[r,c+1],[r,c+2],[r,c+3]].forEach(p=>removed.add(p.join(',')));
+          }
+          if(r+3<SIZE && grid[r+1][c]===color && grid[r+2][c]===color && grid[r+3][c]===color){
+            [[r,c],[r+1,c],[r+2,c],[r+3,c]].forEach(p=>removed.add(p.join(',')));
+          }
+        }
+      }
+    }
+  }
+  if(removed.size){
+    score += removed.size;
+    scoreEl.textContent=score;
+    removed.forEach(s=>{
+      const [r,c]=s.split(',').map(Number);
+      grid[r][c]=null;
+    });
+    setTimeout(()=>{renderBoard(); animating=false; addBalls();},350);
+  }else{
+    setTimeout(()=>{addBalls(); renderBoard(); animating=false;},350);
+  }
+}
+function gameOver(){
+  saveScore(score);
+  setTimeout(()=>alert('Game Over! Score: '+score),10);
+  newGame();
+}
+function newGame(){
+  initBoard();
+  score=0;
+  selected=null;
+  addBalls();
+  renderBoard();
+  scoreEl.textContent=0;
+}
+function setMode(m){
+  mode=m;
+  document.getElementById('classicBtn').classList.toggle('active',mode==='classic');
+  document.getElementById('squareBtn').classList.toggle('active',mode==='squares');
+  newGame();
+}
+</script>
+</body>
+</html>
